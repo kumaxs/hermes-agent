@@ -5,9 +5,8 @@ import type { BillingOverlayState } from '../app/interfaces.js'
 import type { BillingStateResponse } from '../gatewayTypes.js'
 import type { Theme } from '../theme.js'
 
+import { ActionRow, barCells, footer, MenuRow } from './overlayPrimitives.js'
 import { TextInput } from './textInput.js'
-
-const SPEND_BAR_CELLS = 10
 
 interface BillingOverlayProps {
   /** Replace the overlay slot (screen transitions + pending data). */
@@ -16,30 +15,6 @@ interface BillingOverlayProps {
   onClose: () => void
   overlay: BillingOverlayState
   t: Theme
-}
-
-/** A numbered menu row with the ▸ cursor (mirrors ClarifyPrompt). */
-function MenuRow({ active, index, label, t }: { active: boolean; index: number; label: string; t: Theme }) {
-  return (
-    <Text>
-      <Text bold={active} color={active ? t.color.label : t.color.muted} inverse={active}>
-        {active ? '▸ ' : '  '}
-        {index}. {label}
-      </Text>
-    </Text>
-  )
-}
-
-/** Plain (non-numbered) action row with the ▸ cursor (confirm screens). */
-function ActionRow({ active, label, color, t }: { active: boolean; label: string; color?: string; t: Theme }) {
-  return (
-    <Text>
-      <Text color={active ? t.color.accent : t.color.muted}>{active ? '▸ ' : '  '}</Text>
-      <Text bold={active} color={active ? (color ?? t.color.text) : t.color.muted}>
-        {label}
-      </Text>
-    </Text>
-  )
 }
 
 /** 10-cell spend bar + percent (omit entirely when there's no usable cap). */
@@ -57,10 +32,7 @@ function spendBar(s: BillingStateResponse): null | string {
     return null
   }
 
-  const ratio = Math.max(0, Math.min(1, spent / limit))
-  const filled = Math.round(ratio * SPEND_BAR_CELLS)
-  const bar = '█'.repeat(filled) + '░'.repeat(SPEND_BAR_CELLS - filled)
-  const pct = Math.round(ratio * 100)
+  const { bar, pct } = barCells(spent / limit)
   const ceiling = cap.is_default_ceiling ? ' (default ceiling)' : ''
 
   return `${cap.spent_display} of ${cap.limit_display} used   ${bar} ${pct}%${ceiling}`
@@ -75,8 +47,6 @@ function autoReloadLine(s: BillingStateResponse): null | string {
     ? `Auto-reload: on (below ${s.auto_reload.threshold_display} → ${s.auto_reload.reload_to_display})`
     : 'Auto-reload: off'
 }
-
-const footer = (extra: string, t: Theme) => <Text color={t.color.muted}>{extra}</Text>
 
 /**
  * The /billing modal.  A self-contained state machine:
