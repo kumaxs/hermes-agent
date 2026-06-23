@@ -529,14 +529,23 @@ function DiffOverviewRuler({ lines }: { lines: DiffLine[] }) {
   }
 
   return (
-    <div aria-hidden className="pointer-events-none absolute top-0 right-0 bottom-0 w-2.5 opacity-80">
-      {runs.map((run, index) => (
-        <div
-          className={cn('absolute inset-x-0', run.kind === 'add' ? 'bg-(--ui-green)' : 'bg-(--ui-red)')}
-          key={index}
-          style={{ height: `max(0.125rem, ${run.sizePct}%)`, top: `${run.startPct}%` }}
-        />
-      ))}
+    <div aria-hidden className="pointer-events-none absolute top-0 right-0 bottom-0 w-1.5 opacity-80">
+      {/* Cap the tick field to the diff's natural height (rows × line px) so a
+          short diff renders thin, line-aligned ticks instead of stretching a few
+          changes into gross full-height blocks. A long diff hits the 100% cap and
+          compresses into a true overview. */}
+      <div
+        className="relative w-full"
+        style={{ height: `min(100%, ${lines.length * PREVIEW_LINE_PX}px)` }}
+      >
+        {runs.map((run, index) => (
+          <div
+            className={cn('absolute inset-x-0', run.kind === 'add' ? 'bg-(--ui-green)' : 'bg-(--ui-red)')}
+            key={index}
+            style={{ height: `max(0.125rem, ${run.sizePct}%)`, top: `${run.startPct}%` }}
+          />
+        ))}
+      </div>
     </div>
   )
 }
