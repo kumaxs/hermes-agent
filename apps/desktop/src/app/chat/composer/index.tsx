@@ -82,7 +82,8 @@ import {
   onComposerFocusRequest,
   onComposerInsertRefsRequest,
   onComposerInsertRequest,
-  onComposerSubmitRequest
+  onComposerSubmitRequest,
+  onComposerVoiceToggleRequest
 } from './focus'
 import { HelpHint } from './help-hint'
 import { useAtCompletions } from './hooks/use-at-completions'
@@ -197,6 +198,32 @@ export function ChatBar({
 }: ChatBarProps) {
   const aui = useAui()
   const draft = useAuiState(s => s.composer.text)
+
+  // assistant-ui's composer *mutators* (setText/send/…) throw "Composer is not
+  // available" when the thread's composer core isn't bound yet — and unlike the
+  // read path (`s.composer.text`, which is null-safe), there's no graceful
+  // fallback. There's a startup/thread-swap window where this ChatBar's mount
+  // effects (draft restore, clearDraft, external inserts) run before the core
+  // binds; the popout refactor (#49488) widened it by moving the composer out
+  // of the contain wrapper into a sibling of the thread, so the throw began
+  // surfacing as an uncaught error that wedged the desktop input (#49903).
+  //
+  // Guard every mutation: if the core isn't ready, no-op the assistant-ui write.
+  // The contentEditable DOM + draftRef already hold the text, and the
+  // draft⇄editor sync reconciles composer state once the core attaches, so the
+  // draft is never lost — only the (premature) state push is skipped.
+  const setComposerText = useCallback(
+    (value: string) => {
+      try {
+        aui.composer().setText(value)
+      } catch {
+        // Composer core not bound yet — DOM/draftRef carry the text; the sync
+        // effect re-applies it after bind. Swallow so the input stays usable.
+      }
+    },
+    [aui]
+  )
+
   const attachments = useStore($composerAttachments)
   const queuedPromptsBySession = useStore($queuedPromptsBySession)
   const statusItemsBySession = useStore($statusItemsBySession)
@@ -374,7 +401,7 @@ export function ChatBar({
       const next = `${base}${sep}${value}`
 
       draftRef.current = next
-      aui.composer().setText(next)
+      setComposerText(next)
 
       const editor = editorRef.current
 
@@ -385,7 +412,7 @@ export function ChatBar({
 
       setFocusRequestId(id => id + 1)
     },
-    [aui]
+    [setComposerText]
   )
 
   useEffect(() => {
@@ -595,7 +622,7 @@ export function ChatBar({
     const nextDraft = `${currentDraft}${sep}${text}`
 
     draftRef.current = nextDraft
-    aui.composer().setText(nextDraft)
+    setComposerText(nextDraft)
 
     // Push the new text into the contentEditable editor directly. Setting the
     // assistant-ui composer state alone is not enough: the draft→editor sync
@@ -628,7 +655,7 @@ export function ChatBar({
     }
 
     draftRef.current = nextDraft
-    aui.composer().setText(nextDraft)
+    setComposerText(nextDraft)
     requestMainFocus()
 
     return true
@@ -714,7 +741,7 @@ export function ChatBar({
 
     if (nextDraft !== draftRef.current) {
       draftRef.current = nextDraft
-      aui.composer().setText(nextDraft)
+      setComposerText(nextDraft)
     }
 
     window.setTimeout(refreshTrigger, 0)
@@ -840,7 +867,7 @@ export function ChatBar({
       renderComposerContents(editor, prefix)
       placeCaretEnd(editor)
       draftRef.current = composerPlainText(editor)
-      aui.composer().setText(draftRef.current)
+      setComposerText(draftRef.current)
       closeTrigger()
       runAction()
       requestMainFocus()
@@ -868,7 +895,7 @@ export function ChatBar({
 
     const finish = () => {
       draftRef.current = composerPlainText(editor)
-      aui.composer().setText(draftRef.current)
+      setComposerText(draftRef.current)
       requestMainFocus()
       keepTriggerOpen ? window.setTimeout(refreshTrigger, 0) : closeTrigger()
     }
@@ -1320,13 +1347,13 @@ export function ChatBar({
   }
 
   const clearDraft = useCallback(() => {
-    aui.composer().setText('')
+    setComposerText('')
     draftRef.current = ''
 
     if (editorRef.current) {
       editorRef.current.replaceChildren()
     }
-  }, [aui])
+  }, [setComposerText])
 
   // Hand a worktree off to the controller: open a fresh session anchored there,
   // carrying the composer draft as its first turn. Clearing here means the draft
@@ -1369,7 +1396,7 @@ export function ChatBar({
 
   const loadIntoComposer = (text: string, attachments: ComposerAttachment[]) => {
     draftRef.current = text
-    aui.composer().setText(text)
+    setComposerText(text)
     $composerAttachments.set(cloneAttachments(attachments))
 
     const editor = editorRef.current
@@ -1793,7 +1820,7 @@ export function ChatBar({
 
       if (domText !== draftRef.current) {
         draftRef.current = domText
-        aui.composer().setText(domText)
+        setComposerText(domText)
       }
     }
 
@@ -1911,6 +1938,24 @@ export function ChatBar({
     onTranscribeAudio,
     pendingResponse
   })
+
+  // The `composer.voice` hotkey (Ctrl+B) toggles the conversation. Starting
+  // with STT unconfigured lets the conversation surface its own "configure
+  // speech-to-text" notice rather than silently no-opping.
+  const toggleVoiceConversation = useCallback(() => {
+    if (disabled) {
+      return
+    }
+
+    if (voiceConversationActive) {
+      setVoiceConversationActive(false)
+      void conversation.end()
+    } else {
+      setVoiceConversationActive(true)
+    }
+  }, [conversation, disabled, voiceConversationActive])
+
+  useEffect(() => onComposerVoiceToggleRequest(toggleVoiceConversation), [toggleVoiceConversation])
 
   const contextMenu = (
     <ContextMenu

@@ -27,6 +27,7 @@ import { triggerHaptic } from '@/lib/haptics'
 import { setMutableRef } from '@/lib/mutable-ref'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { setSessionYolo } from '@/lib/yolo-session'
+import { openCommandPalettePage } from '@/store/command-palette'
 import {
   $composerAttachments,
   clearComposerAttachments,
@@ -39,6 +40,8 @@ import {
 import { resetSessionBackground } from '@/store/composer-status'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
+import { setPetScale } from '@/store/pet-gallery'
+import { $petGenInput, openPetGenerate } from '@/store/pet-generate'
 import { clearPreviewArtifacts } from '@/store/preview-status'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import {
@@ -1230,6 +1233,47 @@ export function usePromptActions({
             renderSlashOutput(`error: ${err instanceof Error ? err.message : String(err)}`)
           }
         },
+        // /hatch opens the pet generator overlay (the desktop's rich, multi-step
+        // generate→pick→hatch→adopt flow). A typed description seeds the prompt
+        // so `/hatch a cyber fox` lands on the composer step prefilled.
+        hatch: async ({ arg }) => {
+          const concept = arg.trim()
+
+          if (concept) {
+            $petGenInput.set(concept)
+          }
+
+          openPetGenerate()
+        },
+        pet: async ctx => {
+          const [sub = '', rawValue = ''] = ctx.arg.trim().split(/\s+/)
+          const lower = sub.toLowerCase()
+
+          if (lower === 'list' || lower === 'gallery' || lower === 'browse' || lower === 'all') {
+            openCommandPalettePage('pets')
+
+            return
+          }
+
+          // `/pet scale <n>` resizes the floating pet locally (instant) and
+          // persists via the store — no round-trip to the slash worker.
+          if (lower === 'scale') {
+            const value = Number(rawValue)
+
+            if (!rawValue || Number.isNaN(value)) {
+              const resolved = await withSlashOutput(ctx)
+              resolved?.render('usage: /pet scale <factor>  (e.g. /pet scale 0.5)')
+
+              return
+            }
+
+            setPetScale(requestGateway, value)
+
+            return
+          }
+
+          await runExec(ctx)
+        },
         // /browser connect|disconnect|status manages the live CDP connection on
         // the gateway host, mirroring the TUI's browser.manage RPC. It mutates
         // BROWSER_CDP_URL (and may launch Chrome) in the gateway process — only
@@ -1446,6 +1490,7 @@ export function usePromptActions({
 
   const cancelRun = useCallback(async () => {
     const sessionId = activeSessionId || activeSessionIdRef.current
+
     const releaseBusy = () => {
       setMutableRef(busyRef, false)
       setBusy(false)
