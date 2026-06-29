@@ -10503,8 +10503,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # prompt caching.  Refreshing here makes the guard fire only on a
             # DIFFERENT process's writes.  Uses the (possibly compaction-
             # updated) live session_id.  Fail-safe inside the helper.
-            await self._refresh_agent_cache_message_count(
-                session_key, session_entry.session_id
+            _cache_key = f"{session_key}:{session_entry.session_id}" if (session_key and session_entry.session_id) else session_key
+            self._refresh_agent_cache_message_count(
+                _cache_key, session_entry.session_id
             )
 
             # Successful turn — clear any stuck-loop counter for this session.
@@ -14673,8 +14674,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if release_running_state:
             self._release_running_agent_state(session_key)
 
-    async def _refresh_agent_cache_message_count(
-        self, session_key: str, session_id: Optional[str]
+    def _refresh_agent_cache_message_count(
+        self, cache_key: str, session_id: Optional[str]
     ) -> None:
         """Re-baseline a cached agent's stored message_count after THIS turn.
 
@@ -14712,7 +14713,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if _live is None:
             return
         with _cache_lock:
-            cached = _cache.get(session_key)
+            cached = _cache.get(cache_key)
             # Only re-baseline a live 3-tuple entry; skip pending sentinels,
             # legacy 2-tuples (they intentionally opt out of the guard), and
             # the case where the entry was evicted/rebuilt mid-turn.
@@ -14722,10 +14723,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 and cached[0] is not _AGENT_PENDING_SENTINEL
             ):
                 if cached[2] != _live:
-                    _cache[session_key] = (cached[0], cached[1], _live)
+                    _cache[cache_key] = (cached[0], cached[1], _live)
 
     def _evict_cached_agent(self, session_key: str) -> None:
-        """Remove a cached agent for a session (called on /new, /model, etc).
+        """Remove ALL cached agents for a session_key (scoped per session_id).
+
+        With per-session cache keys (``{session_key}:{session_id}``) a single
+        session_key can have multiple live entries, one per session_id.  This
+        method evicts every entry whose key starts with ``{session_key}:``
+        or matches the bare key (legacy entries without session scope).
 
         Pops the entry AND soft-releases the evicted agent's LLM client
         pool so the httpx connection (sockets + held buffers) is freed
@@ -14749,43 +14755,51 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         cap-enforcer and idle-sweeper paths.
         """
         _lock = getattr(self, "_agent_cache_lock", None)
-        evicted = None
+        _cache = getattr(self, "_agent_cache", None) if not _lock else None
+        prefix = f"{session_key}:"
+        evicted_list: list[Any] = []
+
+        def _pop_all(src: OrderedDict) -> list[Any]:
+            result = []
+            keys = [k for k in src if k == session_key or k.startswith(prefix)]
+            for k in keys:
+                evicted = src.pop(k, None)
+                if evicted is not None and evicted is not _AGENT_PENDING_SENTINEL:
+                    result.append(evicted)
+            return result
+
         if _lock:
             with _lock:
-                evicted = self._agent_cache.pop(session_key, None)
-        else:
-            _cache = getattr(self, "_agent_cache", None)
-            if _cache is not None:
-                evicted = _cache.pop(session_key, None)
+                evicted_list = _pop_all(self._agent_cache)
+        elif _cache is not None:
+            evicted_list = _pop_all(_cache)
 
-        agent = evicted[0] if isinstance(evicted, tuple) and evicted else evicted
-        if agent is None or agent is _AGENT_PENDING_SENTINEL:
-            return
+        for evicted in evicted_list:
+            agent = evicted[0] if isinstance(evicted, tuple) and evicted else evicted
+            if agent is None or agent is _AGENT_PENDING_SENTINEL:
+                continue
 
-        # Don't tear down an agent that's actively mid-turn — its client,
-        # sandbox and child subagents are in use by the running request.
-        running_ids = {
-            id(a)
-            for a in getattr(self, "_running_agents", {}).values()
-            if a is not None and a is not _AGENT_PENDING_SENTINEL
-        }
-        if id(agent) in running_ids:
-            return
+            # Don't tear down an agent that's actively mid-turn
+            running_ids = {
+                id(a)
+                for a in getattr(self, "_running_agents", {}).values()
+                if a is not None and a is not _AGENT_PENDING_SENTINEL
+            }
+            if id(agent) in running_ids:
+                continue
 
-        try:
-            threading.Thread(
-                target=self._release_evicted_agent_soft,
-                args=(agent,),
-                daemon=True,
-                name=f"agent-evict-{str(session_key)[:24]}",
-            ).start()
-        except Exception:
-            # If we can't spawn a thread (interpreter shutdown), release
-            # inline as a best-effort fallback.
             try:
-                self._release_evicted_agent_soft(agent)
+                threading.Thread(
+                    target=self._release_evicted_agent_soft,
+                    args=(agent,),
+                    daemon=True,
+                    name=f"agent-evict-{str(session_key)[:24]}",
+                ).start()
             except Exception:
-                pass
+                try:
+                    self._release_evicted_agent_soft(agent)
+                except Exception:
+                    pass
 
     @staticmethod
     def _init_cached_agent_for_turn(agent: Any, interrupt_depth: int) -> None:
@@ -16422,10 +16436,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except Exception:
                     pass
 
+            # Cache key scoped to session_id so each session's entry tracks
+            # its own message_count independently.  Cross-process guard
+            # comparisons are then always within the same DB row, and
+            # session switches naturally resolve to different cache keys.
+            _cache_key = f"{session_key}:{session_id}" if (session_key and session_id) else session_key
             _xproc_evicted_agent = None
             if _cache_lock and _cache is not None:
                 with _cache_lock:
-                    cached = _cache.get(session_key)
+                    cached = _cache.get(_cache_key)
                     if cached and cached[1] == _sig:
                         # cached[2] is the message_count at cache time;
                         # stale when a second process appended rows.
@@ -16443,7 +16462,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 "possible cross-process write",
                                 session_key, _cached_mc, _current_msg_count,
                             )
-                            evicted = self._agent_cache.pop(session_key, None)
+                            evicted = self._agent_cache.pop(_cache_key, None)
                             _ev_agent = evicted[0] if isinstance(evicted, tuple) and evicted else None
                             if _ev_agent and _ev_agent is not _AGENT_PENDING_SENTINEL:
                                 # Defer cleanup until AFTER the lock is
@@ -16467,7 +16486,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             # truly-oldest entries, not the one we just used.
                             if hasattr(_cache, "move_to_end"):
                                 try:
-                                    _cache.move_to_end(session_key)
+                                    _cache.move_to_end(_cache_key)
                                 except KeyError:
                                     pass
                             self._init_cached_agent_for_turn(agent, _interrupt_depth)
@@ -16532,7 +16551,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if _cache_lock and _cache is not None:
                     with _cache_lock:
-                        _cache[session_key] = (agent, _sig, _current_msg_count)
+                        _cache[_cache_key] = (agent, _sig, _current_msg_count)
                         self._enforce_agent_cache_cap()
                 logger.debug("Created new agent for session %s (sig=%s)", session_key, _sig)
 
