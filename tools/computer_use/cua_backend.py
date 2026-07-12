@@ -1412,6 +1412,7 @@ class CuaDriverBackend(ComputerUseBackend):
                     {
                         "pid": self._active_pid,
                         "window_id": self._active_window_id,
+                        "capture_mode": "vision",
                         "session": self._session_id,
                     },
                 )
@@ -1440,6 +1441,7 @@ class CuaDriverBackend(ComputerUseBackend):
                         {
                             "pid": self._active_pid,
                             "window_id": self._active_window_id,
+                            "capture_mode": "vision",
                             "session": self._session_id,
                         },
                         30.0,
@@ -1458,6 +1460,7 @@ class CuaDriverBackend(ComputerUseBackend):
                 {
                     "pid": self._active_pid,
                     "window_id": self._active_window_id,
+                    "capture_mode": mode,
                     "session": self._session_id,
                 },
             )
@@ -1495,6 +1498,7 @@ class CuaDriverBackend(ComputerUseBackend):
                         {
                             "pid": self._active_pid,
                             "window_id": self._active_window_id,
+                            "capture_mode": mode,
                             "session": self._session_id,
                         },
                         30.0,
