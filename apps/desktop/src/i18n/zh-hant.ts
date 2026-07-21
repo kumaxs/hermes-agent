@@ -1437,7 +1437,7 @@ export const zhHant = defineLocale({
     scheduleRequired: '排程為必填項目。',
     scriptOnlyEditHint: '僅腳本任務（無 AI 提示詞）。任務 ID：',
     scriptPathLabel: '腳本路徑',
-    scriptPathPlaceholder: '~/.hermes/scripts/monitor.sh',
+    scriptPathPlaceholder: 'monitor.sh',
     scriptPathRequired: '腳本路徑為必填項目。',
     saveChanges: '儲存變更',
     createAction: '建立排程工作'

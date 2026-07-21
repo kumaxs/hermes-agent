@@ -1740,7 +1740,7 @@ export const zh: Translations = {
     scheduleRequired: '排程为必填项。',
     scriptOnlyEditHint: '仅脚本任务（无 AI 提示词）。任务 ID：',
     scriptPathLabel: '脚本路径',
-    scriptPathPlaceholder: '~/.hermes/scripts/monitor.sh',
+    scriptPathPlaceholder: 'monitor.sh',
     scriptPathRequired: '脚本路径为必填项。',
     saveChanges: '保存更改',
     createAction: '创建定时任务'

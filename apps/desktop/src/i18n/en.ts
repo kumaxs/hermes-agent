@@ -1557,7 +1557,7 @@ export const en: Translations = {
     scheduleRequired: 'Schedule is required.',
     scriptOnlyEditHint: 'Script-only job (no AI prompt). Job id:',
     scriptPathLabel: 'Script path',
-    scriptPathPlaceholder: '~/.hermes/scripts/monitor.sh',
+    scriptPathPlaceholder: 'monitor.sh',
     scriptPathRequired: 'Script path is required.',
     saveChanges: 'Save changes',
     createAction: 'Create cron'
